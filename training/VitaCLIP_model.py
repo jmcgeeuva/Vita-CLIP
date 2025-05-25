@@ -102,13 +102,24 @@ class VitaCLIP(nn.Module):
             )
         
         if backbone_path:
-            ckpt = torch.load(backbone_path)
-            self.load_state_dict(ckpt, strict=False)
+            jit = False
+            try:
+                # loading JIT archive
+                model = torch.jit.load(backbone_path, map_location=device if jit else "cpu").eval()
+                state_dict = None
+            except RuntimeError:
+                # loading saved state dict
+                if jit:
+                    warnings.warn(f"File {backbone_path} is not a JIT archive. Loading as a state dict instead")
+                    jit = False
+                state_dict = torch.load(backbone_path, map_location="cpu")
+            # ckpt = torch.load(backbone_path)
+            self.load_state_dict(state_dict or model.state_dict(), strict=False)
 
         if self.use_text_prompt_learning:
             with open(text_prompt_classes_path, 'r') as f:
                 classes = f.read().strip().split('\n')
-            
+            print(classes)
             self.prompt_learner = TextPromptLearner(
                             classnames=classes,
                             text_model=self.textual,
@@ -121,7 +132,8 @@ class VitaCLIP(nn.Module):
 
         # freeze encoders
         self._freeze_visual_except_prompts_time_embed()
-        self._freeze_textual()
+        if self.use_text_prompt_learning:
+            self._freeze_textual()
 
 
     
@@ -160,6 +172,6 @@ class VitaCLIP(nn.Module):
 
         # cosine similarity as logits
         logit_scale = self.logit_scale.exp()
-        logits = logit_scale * video_features @ text_features.t()
+        logits = logit_scale * video_features @ (text_features+1).t()
 
         return logits

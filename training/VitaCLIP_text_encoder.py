@@ -136,7 +136,7 @@ class CLIPTextEncoder(nn.Module):
         self.token_embedding = nn.Embedding(vocab_size, transformer_width)
         self.positional_embedding = nn.Parameter(torch.empty(self.context_length, transformer_width))
         self.ln_final = LayerNorm(transformer_width)
-        self.text_projection = nn.Parameter(torch.empty(transformer_width, embed_dim))
+        self.text_projection = nn.Parameter(torch.randn(transformer_width, embed_dim))
 
 
     def build_attention_mask(self):
@@ -159,6 +159,7 @@ class CLIPTextEncoder(nn.Module):
         x = x.permute(1, 0, 2)  # LND -> NLD
         x = self.ln_final(x)
 
+        # raise ValueError(x[torch.arange(x.shape[0]), tokenized_prompts.argmax(dim=-1)])
         # x.shape = [batch_size, n_ctx, transformer.width]
         # take features from the eot embedding (eot_token is the highest number in each sequence)
         x = x[torch.arange(x.shape[0]), tokenized_prompts.argmax(dim=-1)] @ self.text_projection
@@ -204,7 +205,9 @@ class TextPromptLearner(nn.Module):
 
         classnames = [name.replace("_", " ") for name in classnames]
         name_lens = [len(_tokenizer.encode(name)) for name in classnames]
+        print(prompt_prefix)
         prompts = [prompt_prefix + " " + name + "." for name in classnames]
+        print(prompts)
 
         tokenized_prompts = torch.cat([tokenize(p) for p in prompts])
         # print(tokenized_prompts.shape)
