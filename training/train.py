@@ -16,6 +16,11 @@ from VitaCLIP_model import VitaCLIP
 
 from collections import OrderedDict
 
+from sklearn.metrics import confusion_matrix
+from sklearn.utils.multiclass import unique_labels
+import matplotlib.pyplot as plt
+import numpy as np
+
 def setup_print(is_master: bool):
     """
     This function disables printing when not in master process
@@ -236,7 +241,8 @@ def main():
                 
             if labels.dtype == torch.long: # no mixup, can calculate accuracy
                 hit1 += (logits.topk(1, dim=1)[1] == labels_slice.view(-1, 1)).sum().item()
-                hit5 += (logits.topk(5, dim=1)[1] == labels_slice.view(-1, 1)).sum().item()
+                # Changed to top-2 for our purposes
+                hit5 += (logits.topk(2, dim=1)[1] == labels_slice.view(-1, 1)).sum().item()
             loss_value += loss.item() / args.batch_split
             
             loss_scaler.scale(loss / args.batch_split).backward()
@@ -274,10 +280,89 @@ def main():
         
         batch_st = datetime.now()
 
+def plot_confusion_matrix(y_true, y_pred, classes, name,
+                          normalize=False,
+                          title=None,
+                          cmap=plt.cm.Blues):
+    """
+    This function prints and plots the confusion matrix.
+    Normalization can be applied by setting `normalize=True`.
+    """
+    if not title:
+        if normalize:
+            title = 'Normalized confusion matrix'
+        else:
+            title = 'Confusion matrix, without normalization'
+
+    # Compute confusion matrix
+
+    new_pred = []
+    for i, (pred, gt) in enumerate(zip(y_pred, y_true)):
+        if type(pred) == type(list()):
+            if gt in pred:
+                new_pred.append(gt)
+            else:
+                # if not just add the top-1 choice
+                new_pred.append(pred[0])
+        else:
+            new_pred.append(pred)
+
+    y_pred = new_pred
+    cm = confusion_matrix(y_true, y_pred)
+
+    # Only use the labels that appear in the data
+    classes = classes[unique_labels(y_true, y_pred)]
+    if normalize:
+        cm = cm.astype('float') / cm.sum(axis=1)[:, np.newaxis]
+        print("Normalized confusion matrix")
+    else:
+        print('Confusion matrix, without normalization')
+
+    # print(cm)
+
+    with open(f'{name}_confusion.txt', 'w') as f:
+        for el in cm:
+            for np_entry in el:
+                f.write(f'{np_entry},')
+            f.write('\n')
+
+    fig, ax = plt.subplots()
+    im = ax.imshow(cm, interpolation='nearest', cmap=cmap)
+    ax.figure.colorbar(im, ax=ax)
+    # We want to show all ticks...
+    ax.set(xticks=np.arange(cm.shape[1]),
+           yticks=np.arange(cm.shape[0]),
+           # ... and label them with the respective list entries
+           xticklabels=classes, yticklabels=classes,
+           title=title,
+           ylabel='True label',
+           xlabel='Predicted label')
+
+    # Rotate the tick labels and set their alignment.
+    plt.setp(ax.get_xticklabels(), rotation=45, ha="right",
+             rotation_mode="anchor")
+
+    # Loop over data dimensions and create text annotations.
+    fmt = '.2f' if normalize else 'd'
+    thresh = cm.max() / 2.
+    for i in range(cm.shape[0]):
+        for j in range(cm.shape[1]):
+            ax.text(j, i, format(cm[i, j], fmt),
+                    ha="center", va="center",
+                    color="white" if cm[i, j] > thresh else "black")
+
+    fig.tight_layout()
+    plt.savefig(f'{name}.png')
+    plt.clf()
+
 
 def evaluate(model: torch.nn.Module, loader: torch.utils.data.DataLoader):
     tot, hit1, hit5 = 0, 0, 0
     eval_st = datetime.now()
+    labeled_ids = []
+    correct_ids = []
+    labeled_ids_k = []
+    correct_ids_k = []
     for data, labels in loader:
         data, labels = data.cuda(), labels.cuda()
         assert data.size(0) == 1
@@ -289,8 +374,14 @@ def evaluate(model: torch.nn.Module, loader: torch.utils.data.DataLoader):
             scores = logits.softmax(dim=-1).mean(dim=0)
 
         tot += 1
-        hit1 += (scores.topk(1)[1] == labels).sum().item()
-        hit5 += (scores.topk(5)[1] == labels).sum().item()
+        values_1, indices_1 = scores.topk(1) #, dim=-1)
+        values_k, indices_k = scores.topk(2) #, dim=-1)
+        hit1 += (indices_1 == labels).sum().item()
+        hit5 += (indices_k == labels).sum().item()
+        labeled_ids.append(indices_1)
+        correct_ids.extend(labels.tolist())
+        labeled_ids_k.append(indices_k)
+        correct_ids_k.extend(labels.tolist())
 
         if tot % 20 == 0:
             print(f'[Evaluation] num_samples: {tot}  '
@@ -298,6 +389,10 @@ def evaluate(model: torch.nn.Module, loader: torch.utils.data.DataLoader):
                   f'cumulative_acc1: {hit1 / tot * 100.:.2f}%  '
                   f'cumulative_acc5: {hit5 / tot * 100.:.2f}%')
 
+    labeled_ids = torch.stack(labeled_ids).tolist()
+    labeled_ids_k = torch.stack(labeled_ids_k).tolist()
+    plot_confusion_matrix(correct_ids, labeled_ids, np.array(["Using a Book", "Teacher Sitting", "Teacher Standing", "Teacher Writing", "Using Technology", "Using a Worksheet"]), name="top1")
+    plot_confusion_matrix(correct_ids_k, labeled_ids_k, np.array(["Using a Book", "Teacher Sitting", "Teacher Standing", "Teacher Writing", "Using Technology", "Using a Worksheet"]), name="topk")
     sync_tensor = torch.LongTensor([tot, hit1, hit5]).cuda()
     dist.all_reduce(sync_tensor)
     tot, hit1, hit5 = sync_tensor.cpu().tolist()

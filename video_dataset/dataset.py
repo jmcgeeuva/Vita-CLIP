@@ -92,7 +92,7 @@ class VideoDataset(torch.utils.data.Dataset):
                 frames, self.spatial_size, self.spatial_size,
             )
         else:
-            frames = [x.to_rgb().to_ndarray() for x in frames]
+            frames = [np.array(_load_image(path, x+1)) for x in range(frames_len)]
             frames = torch.as_tensor(np.stack(frames))
             frames = frames.float() / 255.
 

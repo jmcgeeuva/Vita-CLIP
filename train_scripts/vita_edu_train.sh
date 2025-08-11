@@ -1,12 +1,12 @@
 exp_dir=train_output/edu_supervised
 
 mkdir -p "${exp_dir}"
-python -u -m torch.distributed.run --nproc_per_node 2 \
+python -u -m torch.distributed.run --nproc_per_node 4 \
   ./training/train.py \
     --checkpoint_dir "${exp_dir}" \
     --auto_resume \
     --num_steps 30000 \
-    --save_freq 100 \
+    --save_freq 25 \
     --eval_freq 5000 \
     --print_freq 10 \
     --batch_size 256 \
